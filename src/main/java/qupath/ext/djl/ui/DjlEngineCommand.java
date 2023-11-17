@@ -1,5 +1,5 @@
 /*-
- * Copyright 2022 QuPath developers, University of Edinburgh
+ * Copyright 2022-2023 QuPath developers, University of Edinburgh
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -417,7 +417,7 @@ public class DjlEngineCommand {
 				logger.error("Error requesting engine: " + e.getLocalizedMessage(), e);
 				Dialogs.showErrorMessage(TITLE, "Unable to initialize " + name + "\n- engine might not be supported on this platform, sorry");
 			}
-		} catch (Exception e) {
+		} catch (Throwable e) {
 			if (doQuietly) {
 				logger.debug("Error requesting engine: " + e.getLocalizedMessage(), e);				
 			} else {
