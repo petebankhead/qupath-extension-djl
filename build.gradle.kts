@@ -17,7 +17,14 @@ dependencies {
 	implementation(libs.bundles.logging)
 	implementation(libs.qupath.fxtras)
 	implementation(libs.snakeyaml)
-	implementation("ai.djl:api:${libs.versions.deepJavaLibrary.get()}")
+	implementation(libs.guava)
+
+	implementation(libs.bundles.djl)
+	implementation(libs.bundles.qupath)
+	implementation(libs.qupath.ext.openslide)
+	implementation("ai.djl:basicdataset:${libs.versions.deepJavaLibrary.get()}")
+	implementation("ai.djl.pytorch:pytorch-engine:${libs.versions.deepJavaLibrary.get()}")
+//	implementation("ai.djl:model-zoo:${libs.versions.deepJavaLibrary.get()}")
 
 	// For testing
 	testImplementation(libs.junit)
