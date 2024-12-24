@@ -1,5 +1,5 @@
 /*-
- * Copyright 2022 QuPath developers, University of Edinburgh
+ * Copyright 2022-2024 QuPath developers, University of Edinburgh
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import ai.djl.repository.zoo.ZooModel;
 import ai.djl.translate.NoBatchifyTranslator;
 import ai.djl.translate.TranslateException;
 import ai.djl.translate.TranslatorContext;
+import ai.djl.util.Pair;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,7 +81,7 @@ class DjlDnnModel implements DnnModel, AutoCloseable, UriResource {
 	private void ensureInitialized() {
 		if (model != null)
 			return;
-		if (!failed && model == null) {
+		if (!failed) {
 			synchronized (this) {
 				if (!failed && model == null) {
 					try {
@@ -97,7 +98,7 @@ class DjlDnnModel implements DnnModel, AutoCloseable, UriResource {
 						if (this.inputs == null || this.inputs.isEmpty()) {
 							var description = model.describeInput();
 							if (description != null && !description.isEmpty())
-								inputs = description.stream().collect(Collectors.toMap(p -> p.getKey(), p -> DjlTools.convertShape(p.getValue())));
+								inputs = description.stream().collect(Collectors.toMap(Pair::getKey, p -> DjlTools.convertShape(p.getValue())));
 							else
 								inputs = Map.of(DnnModel.DEFAULT_INPUT_NAME, DnnShape.UNKNOWN_SHAPE);
 						}
@@ -106,7 +107,7 @@ class DjlDnnModel implements DnnModel, AutoCloseable, UriResource {
 							try {
 								var description = model.describeOutput();
 								if (description != null && !description.isEmpty())
-									outputs = description.stream().collect(Collectors.toMap(p -> p.getKey(), p -> DjlTools.convertShape(p.getValue())));
+									outputs = description.stream().collect(Collectors.toMap(Pair::getKey, p -> DjlTools.convertShape(p.getValue())));
 							} catch (Exception e) {
 								logger.debug(e.getMessage(), e);
 							}
@@ -207,12 +208,11 @@ class DjlDnnModel implements DnnModel, AutoCloseable, UriResource {
 		@Override
 		public Mat[] processOutput(TranslatorContext ctx, NDList list) throws Exception {
 			String layout;
-			if ((ndLayout == null || ndLayout.length() != list.get(0).getShape().dimension()) && !list.isEmpty())
-				layout = estimateOutputLayout(list.get(0));
+			if ((ndLayout == null || ndLayout.length() != list.getFirst().getShape().dimension()) && !list.isEmpty())
+				layout = estimateOutputLayout(list.getFirst());
 			else
 				layout = ndLayout;
-			var output = list.stream().map(b -> DjlTools.ndArrayToMat(b, layout)).toArray(Mat[]::new);
-			return output;
+            return list.stream().map(b -> DjlTools.ndArrayToMat(b, layout)).toArray(Mat[]::new);
 		}
 
 		@Override

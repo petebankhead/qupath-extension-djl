@@ -1,4 +1,4 @@
-package qupath.ext.djl.ui;
+package qupath.ext.djl.training;
 
 import ai.djl.training.Trainer;
 import ai.djl.training.evaluator.Evaluator;

@@ -1,10 +1,11 @@
-package qupath.ext.djl.ui;
+package qupath.ext.djl.training;
 
 import ai.djl.Device;
 import ai.djl.Model;
 import ai.djl.basicdataset.cv.classification.Mnist;
 import ai.djl.basicmodelzoo.basic.Mlp;
 import ai.djl.engine.Engine;
+import ai.djl.inference.Predictor;
 import ai.djl.metric.Metrics;
 import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDArrays;
@@ -13,6 +14,7 @@ import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.LayoutType;
 import ai.djl.ndarray.types.Shape;
 import ai.djl.nn.Activation;
+import ai.djl.nn.Block;
 import ai.djl.nn.LambdaBlock;
 import ai.djl.nn.SequentialBlock;
 import ai.djl.nn.convolutional.Conv2d;
@@ -22,6 +24,7 @@ import ai.djl.nn.pooling.Pool;
 import ai.djl.training.DefaultTrainingConfig;
 import ai.djl.training.EasyTrain;
 import ai.djl.training.Trainer;
+import ai.djl.training.TrainingConfig;
 import ai.djl.training.dataset.ArrayDataset;
 import ai.djl.training.dataset.Dataset;
 import ai.djl.training.dataset.RandomAccessDataset;
@@ -62,11 +65,10 @@ import qupath.opencv.dnn.DnnTools;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -85,11 +87,16 @@ public class TrainingApp {
 
     public static void main(String[] args) {
 
-        if (args.length > 0) {
-            new TrainingApp().trainForData(args[0]);
+        if (args.length == 0) {
+            logger.info("No data file specified - will demonstrate training on MNIST");
+            trainMnist();
             return;
         }
+        new TrainingApp().trainForData(args[0]);
 
+    }
+
+    private static void trainMnist() {
         int batchSize = 10_000;
 
         var engine = Engine.getEngine(engineName);
@@ -99,7 +106,6 @@ public class TrainingApp {
 
         try (NDManager manager = engine.newBaseManager(device)) {
 
-            var path = Paths.get("my_model");
             String name = "mlp";
 
             Mnist mnist = Mnist.builder()
@@ -113,24 +119,16 @@ public class TrainingApp {
             Model model = Model.newInstance(name, device);
             model.setBlock(new Mlp(28 * 28, 10, new int[] {128, 64}));
 
-            if (Files.exists(path)) {
-                logger.info("Loading model from: {}", path);
-                model.load(path);
-            }
-
             RandomAccessDataset[] split = mnist.randomSplit(6, 4);
 
             long start = System.currentTimeMillis();
             trainMulticlass(model, 10, split[0], split[1]);
             long end = System.currentTimeMillis();
-            System.out.println("Time: " + (end - start) / 1000.0);
-
-            model.save(path, name);
+            logger.info("Total time: {} seconds", (end - start) / 1000.0);
 
         } catch (Exception e) {
             logger.error("Error during training: {}", e.getMessage(), e);
         }
-
     }
 
     private void trainForData(String pathData) {
@@ -145,28 +143,11 @@ public class TrainingApp {
 
         Device device = getDevice(engine);
 
-        try (Model model = Model.newInstance("my_model", device, engine.getEngineName())) {
+        int nOutputs = 2;
+
+        try (Model model = buildSimpleClassifierModel(engine, "my_model", device, nOutputs)) {
 
             int patchSize = 48;
-            int nOutputs = 2;
-            int nFilters = 16;
-
-            model.setBlock(
-                    new SequentialBlock().addAll(
-                            Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters).build(),
-                            Activation.reluBlock(),
-                            Dropout.builder().build(),
-                            Pool.maxPool2dBlock(createShape(2, 2)),
-                            Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters*2).build(),
-                            Activation.reluBlock(),
-                            Dropout.builder().build(),
-                            Pool.maxPool2dBlock(createShape(2, 2)),
-                            Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters).build(),
-                            Pool.globalMaxPool2dBlock(),
-                            Linear.builder().setUnits(nOutputs).build(),
-                            LambdaBlock.singleton(n -> n.logSoftmax(1))
-                    )
-            );
 
             ensureInitialized();
 
@@ -176,6 +157,30 @@ public class TrainingApp {
             logger.error("Error during training: {}", e.getMessage(), e);
         }
     }
+
+    private static Model buildSimpleClassifierModel(Engine engine, String name, Device device, int nOutputs) {
+        var model = engine.newModel(name, device);
+        model.setBlock(buildSimpleClassifierBlock(16, nOutputs));
+        return model;
+    }
+
+    private static Block buildSimpleClassifierBlock(int nFilters, int nOutputs) {
+        return new SequentialBlock().addAll(
+                Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters).build(),
+                Activation.reluBlock(),
+                Dropout.builder().build(),
+                Pool.maxPool2dBlock(createShape(2, 2)),
+                Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters*2).build(),
+                Activation.reluBlock(),
+                Dropout.builder().build(),
+                Pool.maxPool2dBlock(createShape(2, 2)),
+                Conv2d.builder().setKernelShape(createShape(3, 3)).setFilters(nFilters).build(),
+                Pool.globalMaxPool2dBlock(),
+                Linear.builder().setUnits(nOutputs).build(),
+                LambdaBlock.singleton(n -> n.logSoftmax(1))
+        );
+    }
+
 
     private static Shape createShape(int h, int w) {
         return new Shape(
@@ -229,13 +234,21 @@ public class TrainingApp {
 
         trainMulticlass(model, numEpochs, trainDataset, valDataset);
 
+        classifyDetections(model, imageData, classifications, downsample, patchSize);
+        saveImageData(imageData);
+    }
+
+    private static void classifyDetections(Model model, ImageData<BufferedImage> imageData, List<String> classifications,
+                                           double downsample, int patchSize) {
+
+        var manager = model.getNDManager();
 
         var toClassify = imageData.getHierarchy().getDetectionObjects()
                 .stream()
                 .map(detection -> new TrainingObject(null, detection, imageData.getServer()))
                 .toList();
 
-        var predictors = ThreadLocal.withInitial(() -> model.newPredictor(new NoopTranslator()));
+        var predictors = new HashMap<Thread, Predictor<NDList, NDList>>();
         var count = new AtomicInteger(0);
 
         Lists.partition(toClassify, 512).parallelStream().forEach(batchInput -> {
@@ -246,7 +259,10 @@ public class TrainingApp {
                     var patch = to.getPatch(subManager, downsample, patchSize, patchSize);
                     batch.add(new NDList(patch));
                 }
-                var output = predictors.get().batchPredict(batch);
+                var predictor = predictors.computeIfAbsent(
+                        Thread.currentThread(),
+                        t ->  model.newPredictor(new NoopTranslator()));
+                var output = predictor.batchPredict(batch);
 
                 var outputList = new NDList();
                 output.stream().map(NDList::singletonOrThrow).forEach(outputList::add);
@@ -265,10 +281,19 @@ public class TrainingApp {
                 logger.error("Error predicting patch: {}", e.getMessage(), e);
             }
         });
+
+        predictors.values().forEach(Predictor::close);
+
+    }
+
+    private static boolean saveImageData(ImageData<BufferedImage> imageData) throws IOException {
         var path = imageData.getLastSavedPath();
         var file = path == null ? null : new File(path);
         if (file != null && file.exists()) {
             PathIO.writeImageData(file, imageData);
+            return true;
+        } else {
+            return false;
         }
     }
 
@@ -333,8 +358,53 @@ public class TrainingApp {
         var device = manager.getDevice();
         // Create separately so that we can initialize the stage before the first epoch completes
         ensureToolkitInitialized();
-        DefaultTrainingConfig config = new DefaultTrainingConfig(Loss.softmaxCrossEntropyLoss())
-                .optDevices(new Device[]{device})
+
+        // Now that we have our training configuration, we should create a new trainer for our model
+        Trainer trainer = createTrainer(model, Loss.softmaxCrossEntropyLoss(), device);
+        initializeTrainer(trainer, train);
+
+        EasyTrain.fit(trainer, numEpochs, train, val);
+    }
+
+    private static void initializeTrainer(Trainer trainer, Dataset dataset) throws TranslateException, IOException {
+        var manager = trainer.getManager();
+        try (var batch = dataset.getData(manager).iterator().next()) {
+            initializeTrainer(trainer, batch.getData());
+        }
+    }
+
+
+    private static void initializeTrainer(Trainer trainer, NDList input) {
+        var shapes = input.stream().map(NDArray::getShape).toArray(Shape[]::new);
+        for (int i = 0; i < shapes.length; i++) {
+            var s = shapes[i];
+            if (!s.isLayoutKnown()) {
+                String layout = switch (s.dimension()) {
+                    case 2 -> "HW";
+                    case 3 -> "CHW";
+                    case 4 -> "NCHW";
+                    default -> throw new IllegalArgumentException("Unsupported shape: " + s);
+                };
+                shapes[i] = new Shape(s.getShape(), layout);
+            }
+        }
+        trainer.initialize(shapes);
+    }
+
+    private static Trainer createTrainer(Model model, Loss loss, Device... devices) {
+        var manager = model.getNDManager();
+        if (devices.length == 0)
+            devices = new Device[]{manager.getDevice()};
+
+        var config = createTrainingConfig(loss, devices);
+        Trainer trainer = model.newTrainer(config);
+        trainer.setMetrics(new Metrics());
+        return trainer;
+    }
+
+    private static TrainingConfig createTrainingConfig(Loss loss, Device... devices) {
+        return new DefaultTrainingConfig(loss)
+                .optDevices(devices)
                 .addTrainingListeners(
                         new EpochTrainingListener(),
                         new EvaluatorTrainingListener(),
@@ -343,23 +413,6 @@ public class TrainingApp {
                         createJFXTrainingListenerWithStage()
                 )
                 .addEvaluator(new Accuracy()); // Use accuracy so we humans can understand how accurate the model is
-//                    .addTrainingListeners(TrainingListener.Defaults.logging());
-
-        // Now that we have our training configuration, we should create a new trainer for our model
-        Trainer trainer = model.newTrainer(config);
-        trainer.setMetrics(new Metrics());
-
-        try (var batch = train.getData(manager).iterator().next()) {
-            var shapes = batch.getData().stream().map(NDArray::getShape).toArray(Shape[]::new);
-            for (int i = 0; i < shapes.length; i++) {
-                var s = shapes[i];
-                if (!s.isLayoutKnown()) {
-                    shapes[i] = new Shape(s.getShape(), "NCHW");
-                }
-            }
-            trainer.initialize(shapes);
-        }
-        EasyTrain.fit(trainer, numEpochs, train, val);
     }
 
 
